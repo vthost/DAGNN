@@ -1,0 +1,9 @@
+gensim
+tqdm
+pandas
+numpy
+scipy
+networkx
+scikit_learn
+torchvision
+python-igraph
