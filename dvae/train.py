@@ -72,10 +72,10 @@ parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 
 parser.add_argument('--dagnn_layers', type=int, default=2)
-parser.add_argument('--dagnn_agg_x', type=int, default=1, choices=[0, 1])
-parser.add_argument('--dagnn_agg', type=str, default=NA_GATED_SUM)
-parser.add_argument('--dagnn_out_pool_all', type=int, default=0 if d == 'asia_200k' else 0, choices=[0, 1])
-parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_CNN, P_MAX, P_MEAN, P_ADD])
+parser.add_argument('--dagnn_agg_x', type=int, default=0, choices=[0, 1])
+parser.add_argument('--dagnn_agg', type=str, default=NA_ATTN_H)
+parser.add_argument('--dagnn_out_pool_all', type=int, default=0, choices=[0, 1])
+parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_MAX, P_MEAN, P_ADD])
 parser.add_argument('--dagnn_dropout', type=float, default=0.0)
 
 parser.add_argument('--clip', default=0, type=float,

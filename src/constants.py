@@ -22,9 +22,8 @@ P_MEAN = "mean"
 P_ADD = "add"  # do not use "sum" so that can be used to call tg pooling function
 P_SUM = "sum"  # do not use "sum" so that can be used to call tg pooling function
 P_MAX = "max"
-P_CNN = "cnn"
 P_ATTN = "attn"
 EMB_POOLINGS = [P_MEAN, P_MAX, P_SUM]
-POOLINGS = [P_MEAN, P_MAX, P_CNN, P_ATTN, P_ADD]
+POOLINGS = [P_MEAN, P_MAX, P_ATTN, P_ADD]
 
 

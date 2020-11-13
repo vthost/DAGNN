@@ -30,7 +30,6 @@ mkdir -p $RESULTS
 LAYERS=2
 AGG_X=0
 AGG=attn_h
-OUT_WX=0
 POOL_ALL=0
 POOL=max
 DROPOUT=0
@@ -38,7 +37,7 @@ BIDIR=1
 CLIP=0.25
 
 if [[ "$MODEL" = "DAGNN"* ]]; then
-    NAME="${MODEL}_l${LAYERS}_b${BIDIR}_a${AGG}_owx${OUT_WX}_pa${POOL_ALL}_p${POOL}_c${CLIP}"
+    NAME="${MODEL}_l${LAYERS}_b${BIDIR}_a${AGG}_pa${POOL_ALL}_p${POOL}_c${CLIP}"
 fi
 
 
@@ -47,12 +46,12 @@ python bo.py \
   --data-name="asia_200k" \
   --save-appendix=$NAME --model=$MODEL --bidirectional \
   --checkpoint=$CHECK \
-  --res-dir=$RESULTS &>> $RESULTS/"${NAME}.txt"
+  --res-dir=$RESULTS &> $RESULTS/"${NAME}.txt"
 
 python summarize.py \
   --data-type=BN \
   --name=$NAME \
-  --res-dir=$RESULTS &>> $RESULTS/"${NAME}.txt"
+  --res-dir=$RESULTS &> $RESULTS/"${NAME}.txt"
 
 echo "Completed"
 date

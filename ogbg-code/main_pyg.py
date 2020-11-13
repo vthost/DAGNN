@@ -160,7 +160,7 @@ def main():
     parser.add_argument('--dagnn_agg_x', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_agg', type=str, default=NA_ATTN_H)
     parser.add_argument('--dagnn_out_pool_all', type=int, default=0, choices=[0, 1])
-    parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_CNN, P_MAX, P_MEAN, P_ADD])
+    parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_MAX, P_MEAN, P_ADD])
     parser.add_argument('--dagnn_dropout', type=float, default=0.0)
     parser.add_argument('--dagnn_mapper_bias', type=int, default=1, choices=[0, 1])
     parser.add_argument('--dagnn_dense', type=int, default=0, choices=[0, 1])
