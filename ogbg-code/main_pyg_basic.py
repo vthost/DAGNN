@@ -1,24 +1,31 @@
-
+import torch
+# from torch_geometric.data import DataLoader
+import torch.optim as optim
+import torch.nn.functional as F
 from torchvision import transforms
+from model.gnn import GNN
 from tqdm import tqdm
 import argparse
+import time
 import numpy as np
+import pandas as pd
+import os
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 ### importing OGB
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 
 ### importing utils
-from utils import get_vocab_mapping
+from utils import ASTNodeEncoder, get_vocab_mapping
 ### for data transform
 from utils import augment_edge, encode_y_to_arr, decode_arr_to_seq
 
 ### DAGNN
 import random
-from models.baselines import *
+from model.baselines import *
 from src.constants import *
-from src.tg.dataloader import DataLoader
-from src.tg.data_parallel import DataParallel
+from tg.dataloader import DataLoader
+from tg.data_parallel import DataParallel
 ###
 import pandas as pd
 # make sure summary_report is imported after src.utils (also from dependencies)
@@ -27,7 +34,62 @@ from utils2 import *
 multicls_criterion = torch.nn.CrossEntropyLoss()
 
 
-def eval(model, device, loader, evaluator, arr_to_seq):
+# def train(model, device, loader, optimizer, args, evaluator, arr_to_seq ,vocab2index):
+#     model.train()
+#     seq_ref_list = []
+#     seq_pred_list = []
+#
+#     loss_accum = 0
+#     for step, batch in enumerate(tqdm(loader, desc="Iteration")):
+#         # batch = batch.to(device)
+#         batch = [b for b in batch if not b.x.shape[0] == 1 and not b.batch[-1] == 0 ]
+#         if not batch: #batch.x.shape[0] == 1 or batch.batch[-1] == 0:
+#             # print("FALSE")
+#             pass
+#         else:
+#             pred_list = model(batch)
+#             # optimizer.zero_grad()
+#
+#             loss = 0
+#             for i in range(len(pred_list)):
+#                 y = torch.cat([b.y_arr[:,i].to(device) for b in batch], dim=0)
+#                 loss += multicls_criterion(pred_list[i].to(torch.float32), y)  # batch.y_arr[:,i])
+#
+#             loss = loss / len(pred_list)
+#
+#             # NO LOSS BACKWARD FOR STATIC SYSTEMS loss.backward()
+#             # if args.clip > 0:
+#             #     torch.nn.utils.clip_grad_norm(model.parameters(), args.clip)
+#             # optimizer.step()
+#
+#             loss_accum += loss.item()
+#
+#             mat = []
+#             for i in range(len(pred_list)):
+#                 mat.append(torch.argmax(pred_list[i], dim=1).view(-1, 1))
+#             mat = torch.cat(mat, dim=1)
+#
+#             seq_pred = [arr_to_seq(arr) for arr in mat]
+#
+#             # PyG = 1.4.3
+#             # seq_ref = [batch.y[i][0] for i in range(len(batch.y))]
+#
+#             # PyG >= 1.5.0
+#             seq_ref = [b.y[i] for b in batch for i in range(len(b.y))]  # [batch.y[i] for i in range(len(batch.y))]
+#             print(seq_pred)
+#             print(seq_ref)
+#             print([s for s in seq_ref if s in vocab2index])
+#             print("*"*20)
+#             seq_ref_list.extend(seq_ref)
+#             seq_pred_list.extend(seq_pred)
+#
+#     print('Average training loss: {}'.format(loss_accum / (step + 1)))
+#     input_dict = {"seq_ref": seq_ref_list, "seq_pred": seq_pred_list}
+#
+#     return loss_accum / (step + 1), evaluator.eval(input_dict)
+#
+
+def eval(model, device, loader, evaluator, arr_to_seq,vocab2index):
     model.eval()
     seq_ref_list = []
     seq_pred_list = []
@@ -95,6 +157,7 @@ def main():
     parser.add_argument('--filename', type=str, default="test",
                         help='filename to output result (default: )')
 
+
     parser.add_argument('--dir_data', type=str, default=None,
                         help='... dir')
     parser.add_argument('--dir_results', type=str, default=DIR_RESULTS,
@@ -142,6 +205,7 @@ def main():
     print('Target seqence less or equal to {} is {}%.'.format(args.max_seq_len, np.sum(seq_len_list <= args.max_seq_len) / len(seq_len_list)))
 
     split_idx = dataset.get_idx_split()
+
     if args.train_idx:
         train_idx = pd.read_csv(os.path.join("dataset", args.train_idx + ".csv.gz"), compression="gzip", header=None).values.T[0]
         train_idx = torch.tensor(train_idx, dtype = torch.long)
@@ -151,7 +215,14 @@ def main():
 
     vocab2idx, idx2vocab = get_vocab_mapping([dataset.data.y[i] for i in split_idx['train']], args.num_vocab)
 
+    # if not torch.cuda.is_available():
+    #     split_idx['valid'] = list(range(50, 60))
+    #     split_idx['test'] = list(range(60, 70))
+        # pass
+
     ### set the transform function
+    # augment_edge: add next-token edge as well as inverse edges. add edge attributes.
+    # encode_y_to_arr: add y_arr to PyG data object, indicating the array representation of a sequence.
     # DAGNN
     augment = augment_edge2 if "dagnn" in args.gnn else augment_edge
     dataset.transform = transforms.Compose([augment, lambda data: encode_y_to_arr(data, vocab2idx, args.max_seq_len)])
@@ -159,7 +230,14 @@ def main():
     ### automatic evaluator. takes dataset name as input
     evaluator = Evaluator(args.dataset)
 
+    nodetypes_mapping = pd.read_csv(os.path.join(dataset.root, 'mapping', 'typeidx2type.csv.gz'))
     nodeattributes_mapping = pd.read_csv(os.path.join(dataset.root, 'mapping', 'attridx2attr.csv.gz'))
+    ### Encoding node features into emb_dim vectors.
+    ### The following three node features are used.
+    # 1. node type
+    # 2. node attribute
+    # 3. node depth
+    # node_encoder = ASTNodeEncoder(args.emb_dim, num_nodetypes = len(nodetypes_mapping['type']), num_nodeattributes = len(nodeattributes_mapping['attr']), max_depth = 20)
 
     start_fold = 1
     checkpoint_fn = ""
@@ -192,8 +270,10 @@ def main():
             # torch.backends.cudnn.benchmark = False
 
         n_devices = torch.cuda.device_count() if torch.cuda.device_count() > 0 else 1
-        # valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=args.batch_size, shuffle=False,
-        #                           num_workers=args.num_workers, n_devices=n_devices)
+        # train_loader = DataLoader(dataset[split_idx["train"]], batch_size=args.batch_size, shuffle=True,
+        #                           num_workers = args.num_workers, n_devices=n_devices)
+        valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=args.batch_size, shuffle=False,
+                                  num_workers=args.num_workers, n_devices=n_devices)
         test_loader = DataLoader(dataset[split_idx["test"]], batch_size=args.batch_size, shuffle=False,
                                  num_workers=args.num_workers, n_devices=n_devices)
 
@@ -226,9 +306,10 @@ def main():
             checkpoint_fn = '%s.pt' % os.path.join(args.dir_save, args.filename + "_" + str(fold) + "_" + str(epoch))
 
             print("=====Fold {}, Epoch {}".format(fold, epoch))
+            # loss, train_perf = train(model, device, train_loader, optimizer, args, evaluator, arr_to_seq = lambda arr: decode_arr_to_seq(arr, idx2vocab), vocab2index=vocab2idx)
             loss, train_perf = 0, {"F1": 0}
             valid_perf = {"F1": 0} #eval(model, device, valid_loader, evaluator, arr_to_seq = lambda arr: decode_arr_to_seq(arr, idx2vocab), vocab2index=vocab2idx)
-            test_perf = eval(model, device, test_loader, evaluator, arr_to_seq = lambda arr: decode_arr_to_seq(arr, idx2vocab))
+            test_perf = eval(model, device, test_loader, evaluator, arr_to_seq = lambda arr: decode_arr_to_seq(arr, idx2vocab), vocab2index=vocab2idx)
 
             print({'Train': train_perf, 'Validation': valid_perf, 'Test': test_perf})
             with open(train_file, 'a') as f:

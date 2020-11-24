@@ -24,7 +24,6 @@ PAT=10
 EA=1
 LAYDAG=2
 BIDIR=1
-AGG_X=0
 AGG=attn_h
 POOL_ALL=0
 POOL=max
@@ -42,7 +41,7 @@ cd ogbg-code
 
 NAME="${MODEL}"
 if [[ "$MODEL" = "dagnn" ]]; then
-    NAME="dagnn_ea${EA}_l${LAYDAG}_b${BIDIR}_ax${AGG_X}_a${AGG}_pa${POOL_ALL}_p${POOL}_c${CLIP}"
+    NAME="dagnn_ea${EA}_l${LAYDAG}_b${BIDIR}_a${AGG}_pa${POOL_ALL}_p${POOL}_c${CLIP}"
 fi
 NAME="${NAME}_lr${LR}"
 if [[ "$TIDX" != "" ]]; then
@@ -63,7 +62,7 @@ done
 python main_pyg_lp.py --gnn=$MODEL --drop_ratio=0 --max_seq_len=5 --num_vocab=5000 --lr=$LR \
       --num_layer=$LAY  --emb_dim=300 --batch_size=$BATCHSIZE --folds=$FOLDS --epochs=$EPOCHS --num_workers=$BATCHSIZE --dataset="ogbg-code" \
       --dir_data=$DATA  --dir_save=$SAVE --filename=$NAME --train_idx=$TIDX --clip=$CLIP --dagnn_mapper_bias=$MAPPER_BIAS \
-      --dagnn_wea=$EA --dagnn_layers=$LAYDAG --dagnn_bidir=$BIDIR --dagnn_agg_x=$AGG_X --dagnn_agg=$AGG \
+      --dagnn_wea=$EA --dagnn_layers=$LAYDAG --dagnn_bidir=$BIDIR --dagnn_agg=$AGG \
       --dagnn_out_pool_all=$POOL_ALL --dagnn_out_pool=$POOL --dagnn_dropout=$DROPOUT \
       --checkpointing=1 --checkpoint=$CHECKPOINT  --patience=$PAT
 

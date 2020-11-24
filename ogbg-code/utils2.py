@@ -3,7 +3,6 @@ import os
 import torch
 import statistics
 
-
 class ASTNodeEncoder2(torch.nn.Module):
     '''
         Input:
@@ -107,5 +106,4 @@ def load_checkpoint(checkpoint_fn, model, optimizer):
 def load_checkpoint_results(checkpoint_fn):
     checkpoint = torch.load(checkpoint_fn)
     return checkpoint['results']
-
 

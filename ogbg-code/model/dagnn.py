@@ -6,8 +6,7 @@ from torch_scatter import scatter_add
 from torch_geometric.nn.glob import *
 from torch_geometric.nn.inits import uniform, glorot
 from torch_geometric.nn import MessagePassing
-from src.constants import * #C_GRU, C_LSTM, C_RNN, P_MAX
-from src.utils import *
+from src.constants import *
 from src.utils_dag import stack_padded
 from typing import Optional
 from torch import Tensor
@@ -19,7 +18,7 @@ class DAGNN(nn.Module):
 
     def __init__(self, num_vocab, max_seq_len, emb_dim, hidden_dim, out_dim,
                  num_rels=2, w_edge_attr=True, num_layers=2, bidirectional=False, mapper_bias=True,  # bias only for DVAE simulation
-                 agg_x=True, agg=NA_SUM, out_wx=True, out_pool_all=True, out_pool=P_MAX, encoder=None, dropout=0.0,
+                 agg_x=True, agg=NA_ATTN_H, out_wx=True, out_pool_all=True, out_pool=P_MAX, encoder=None, dropout=0.0,
                  word_vectors=None, emb_dims=[], activation=None, num_class=0, recurr=1):
         super().__init__()
         self.num_class = num_class
@@ -53,8 +52,8 @@ class DAGNN(nn.Module):
         # agg_x makes only sense in first NN layer we could afterwards automatically use h? but postponing this...
         # (then add pred_dim term directly when looping over layers below)
         num_rels = num_rels if w_edge_attr else 1
-        pred_dim = self.emb_dim if self.agg_x else self.hidden_dim  # + 8
-        attn_dim = self.emb_dim if "_x" in agg else self.hidden_dim  # + 8
+        pred_dim = self.emb_dim if self.agg_x else self.hidden_dim
+        attn_dim = self.emb_dim if "_x" in agg else self.hidden_dim
         if "self_attn" in agg:
             # it wouldn't make sense to perform attention based on h when aggregating x... so no hidden_dim needed
             self.node_aggr_0 = nn.ModuleList([
@@ -319,6 +318,37 @@ class SelfAttnConv(MessagePassing):
         return aggr_out
 
 
+#  simpler version where attn always based on vectors that are also aggregated
+# class SelfAttnConv(MessagePassing):
+#     def __init__(self, emb_dim, num_relations=1, reverse=False):
+#         super(SelfAttnConv, self).__init__(aggr='add', flow='target_to_source' if reverse else 'source_to_target')
+#
+#         assert emb_dim > 0
+#         self.edge_encoder = torch.nn.Linear(num_relations, emb_dim) if num_relations > 1 else None
+#         self.attn_lin = nn.Linear(emb_dim, 1)
+#
+#     def forward(self, x, edge_index, edge_attr=None, **kwargs):
+#         edge_embedding = self.edge_encoder(edge_attr) if self.edge_encoder is not None else None
+#         return self.propagate(edge_index, x=x, edge_attr=edge_embedding)
+#
+#     def message(self, x_j, edge_attr, index: Tensor, ptr: OptTensor, size_i: Optional[int]):
+#         h_j = x_j + edge_attr if edge_attr is not None else x_j
+#         # have to to this here instead of pre-computing a in forward because of missing edges in forward
+#         # we could do it in forward, but in our dags there is not much overlap in one convolution step
+#         # and if attn transformation linear is applied in forward we'd have to consider full X/H matrices
+#         # which in our case can be a lot larger
+#         # BUT we could move it to forward similar to pyg GAT implementation
+#         # ie apply two different linear to each respectively X/H, edge_attrs which yield a scalar each
+#         # the in message only sum those up (to obtain a single scalar) and do softmax
+#         a_j = self.attn_lin(h_j)
+#         a_j = softmax(a_j, index, ptr, size_i)
+#         t = x_j * a_j
+#         return t
+#
+#     def update(self, aggr_out):
+#         return aggr_out
+
+
 class AttnConv(MessagePassing):
     def __init__(self, attn_q_dim, emb_dim, attn_dim=0, num_relations=1, reverse=False):
         super(AttnConv, self).__init__(aggr='add', flow='target_to_source' if reverse else 'source_to_target')
@@ -382,3 +412,5 @@ class MultAttnConv(MessagePassing):
 
     def update(self, aggr_out):
         return aggr_out
+
+

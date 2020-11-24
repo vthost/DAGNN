@@ -1,27 +1,47 @@
+import pdb
+import pickle
 import sys
+import os
 import os.path
+import collections
+import torch
+from tqdm import tqdm
+import itertools
 from scipy.spatial.distance import pdist
+import matplotlib.pyplot as plt
 from sparse_gp import SparseGP
 import scipy.stats as sps
+import numpy as np
+import scipy.io
 from scipy.io import loadmat
 from scipy.stats import pearsonr
 sys.path.append('%s/../software/enas' % os.path.dirname(os.path.realpath(__file__))) 
 sys.path.append('%s/..' % os.path.dirname(os.path.realpath(__file__))) 
 sys.path.insert(0, '../')
+
 from util import *
 from evaluate_BN import Eval_BN
-from shutil import copy
-
+from models import *
+from dagnn import DAGNN
+from dagnn_bn import DAGNN_BN
 from src.constants import *
-
+# m='DVAE_BN' #47.095159912109374
+# m='DVAE_BN_PYG' #loss: 47.095159912109374
+# m='DAGNN_BN'   # 46.940618896484374
+# d='asia_200k'
+#
+# # m='DVAE_PYG' #
+# # m='DVAE'
+# m='DAGNN'
+# d ='final_structures6'
 
 '''Experiment settings'''
 parser = argparse.ArgumentParser(description='Bayesian optimization experiments.')
 # must specify
-parser.add_argument('--data-name', default='final_structures6', help='graph dataset name')
+parser.add_argument('--data-name', default='asia_200k', help='graph dataset name')  #'final_structures6'
 parser.add_argument('--save-appendix', default='DVAE_PYG',
                     help='what is appended to data-name as save-name for results')
-parser.add_argument('--checkpoint', type=int, default=10,
+parser.add_argument('--checkpoint', type=int, default=50,
                     help="load which epoch's model checkpoint")
 parser.add_argument('--res-dir', default='../results-bo/',
                     help='where to save the Bayesian optimization results')
@@ -32,7 +52,7 @@ parser.add_argument('--predictor', action='store_true', default=False,
                     help='if True, use the performance predictor instead of SGP')
 parser.add_argument('--grad-ascent', action='store_true', default=False,
                     help='if True and predictor=True, perform gradient-ascent with predictor')
-parser.add_argument('--BO-rounds', type=int, default=1,  #500,
+parser.add_argument('--BO-rounds', type=int, default=10,
                     help="how many rounds of BO to perform")
 parser.add_argument('--BO-batch-size', type=int, default=50, 
                     help="how many data points to select in each BO round")
@@ -55,26 +75,29 @@ parser.add_argument('--vis-2d', action='store_true', default=False,
 # can be inferred from the cmd_input.txt file, no need to specify
 parser.add_argument('--data-type', default='BN',
                     help='ENAS: ENAS-format CNN structures; BN: Bayesian networks')
-parser.add_argument('--model', default='DVAE_PYG', help='model to use: DVAE, SVAE, \
-                    DVAE_fast, DVAE_BN, SVAE_oneshot, DVAE_GCN')
+parser.add_argument('--model', default='DAGNN_BN', help='model to use: DVAE, SVAE, \
+                    DVAE_fast, DAGNN_BN, SVAE_oneshot, DVAE_GCN')
 parser.add_argument('--hs', type=int, default=501, metavar='N',
                     help='hidden size of GRUs')
 parser.add_argument('--nz', type=int, default=56, metavar='N',
                     help='number of dimensions of latent vectors z')
 parser.add_argument('--bidirectional', action='store_true', default=False,
                     help='whether to use bidirectional encoding')
+parser.add_argument('--bo',type=int, default=0, choices=[0, 1],
+                    help='whether to do BO')
 
-parser.add_argument('--dagnn_layers', type=int, default=1)
-parser.add_argument('--dagnn_agg_x', type=int, default=0, choices=[0, 1])
-parser.add_argument('--dagnn_agg', type=str, default=NA_ATTN_X)
+
+parser.add_argument('--dagnn_layers', type=int, default=2)
+parser.add_argument('--dagnn_agg', type=str, default=NA_ATTN_H)
+parser.add_argument('--dagnn_out_wx', type=int, default=0, choices=[0, 1])
 parser.add_argument('--dagnn_out_pool_all', type=int, default=0, choices=[0, 1])
-parser.add_argument('--dagnn_out_pool', type=str, default=P_ADD, choices=[P_ATTN, P_CNN, P_MAX, P_MEAN, P_ADD])
+parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_MAX, P_MEAN, P_ADD])
 parser.add_argument('--dagnn_dropout', type=float, default=0.0)
 
 args = parser.parse_args()
 data_name = args.data_name
 save_appendix = args.save_appendix
-data_dir = os.path.join(args.data_dir,'{}_{}'.format(data_name, save_appendix)) + "/" # data and model folder
+data_dir = os.path.join(args.data_dir,'{}_{}'.format(data_name, save_appendix)) + "/"  # data and model folder
 checkpoint = args.checkpoint
 res_dir = args.res_dir
 data_type = args.data_type
@@ -110,6 +133,7 @@ with open(data_dir + data_name + '.pkl', 'rb') as f:
 START_TYPE, END_TYPE = graph_args.START_TYPE, graph_args.END_TYPE
 max_n = graph_args.max_n
 nvt = graph_args.num_vertex_type
+args.nvt = nvt
 
 '''BO settings'''
 BO_rounds = args.BO_rounds
@@ -123,7 +147,20 @@ random_as_test = args.random_as_test
 lr = 0.0005  # the learning rate to train the SGP model
 max_iter = 100  # how many iterations to optimize the SGP each time
 
+# architecture performance evaluator
+# if data_type == 'ENAS':
+#     sys.path.append('%s/../software/enas/src/cifar10' % os.path.dirname(os.path.realpath(__file__)))
+#     from evaluation import *
+#     eva = Eval_NN()  # build the network acc evaluater
+                     # defined in ../software/enas/src/cifar10/evaluation.py
+
 data = loadmat(data_dir + '{}_latent_epoch{}.mat'.format(data_name, checkpoint))  # load train/test data
+#data = loadmat(data_dir + '{}_latent.mat'.format(data_name))  # load train/test data
+
+if torch.cuda.is_available():
+    device = torch.device("cuda:" + str(0))
+else:
+    device = torch.device("cpu")
 
 # do BO experiments with 10 random seeds
 for rand_idx in range(1, 11):
@@ -136,28 +173,48 @@ for rand_idx in range(1, 11):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir) 
 
-    # backup files
-    copy('bo.py', save_dir)
-    if args.predictor:
-        copy('run_pred_{}.sh'.format(data_type), save_dir)
-    elif args.vis_2d:
-        copy('run_vis_{}.sh'.format(data_type), save_dir)
-    else:
-        copy('run_bo_{}.sh'.format(data_type), save_dir)
-
     # set seed
     random_seed = rand_idx
     torch.manual_seed(random_seed)
-    torch.cuda.manual_seed(random_seed)
     np.random.seed(random_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(random_seed)
+
+    # load the decoder
+    if args.model.startswith("DAGNN"):
+        model = eval(args.model)(nvt, args.hs, args.hs,
+                                 graph_args.max_n,
+                                 graph_args.num_vertex_type,
+                                 graph_args.START_TYPE,
+                                 graph_args.END_TYPE,
+                                 hs=args.hs,
+                                 nz=args.nz,
+                                 num_nodes=nvt,
+                                 agg=args.dagnn_agg,
+                                 num_layers=args.dagnn_layers, bidirectional=args.bidirectional,
+                                 out_wx=args.dagnn_out_wx > 0, out_pool_all=args.dagnn_out_pool_all,
+                                 out_pool=args.dagnn_out_pool,
+                                 dropout=args.dagnn_dropout)
+    else:
+        model = eval(args.model)(
+            graph_args.max_n,
+            graph_args.num_vertex_type,
+            graph_args.START_TYPE,
+            graph_args.END_TYPE,
+            hs=args.hs,
+            nz=args.nz,
+            bidirectional=args.bidirectional
+        )
+    model.to(device)
+    load_module_state(model, data_dir + 'model_checkpoint{}.pth'.format(checkpoint))
 
     # load the data
     X_train = data['Z_train']
     y_train = -data['Y_train'].reshape((-1,1))
     if data_type == 'BN':
         # remove duplicates, otherwise SGP ill-conditioned
-        #X_train, unique_idxs = np.unique(X_train, axis=0, return_index=True)
-        #y_train = y_train[unique_idxs]
+        X_train, unique_idxs = np.unique(X_train, axis=0, return_index=True)
+        y_train = y_train[unique_idxs]
         random_shuffle = np.random.permutation(range(len(X_train)))
         keep = 5000
         X_train = X_train[random_shuffle[:keep]]
@@ -174,7 +231,6 @@ for rand_idx in range(1, 11):
 
     print("Best train score is: ", best_train_score)
 
-
     '''Bayesian optimiation begins here'''
     iteration = 0
     best_score = 1e15
@@ -189,14 +245,20 @@ for rand_idx in range(1, 11):
     if os.path.exists(save_dir + 'best_arc_scores.txt'):
         os.remove(save_dir + 'best_arc_scores.txt')
 
-    while iteration < BO_rounds:
+    while iteration < BO_rounds and args.bo:
         print("Iteration", iteration)
-        # We fit the GP
-        M = 500
-        sgp = SparseGP(X_train, 0 * X_train, y_train, M)
-        sgp.train_via_ADAM(X_train, 0 * X_train, y_train, X_test, X_test * 0,  \
-            y_test, minibatch_size = 2 * M, max_iterations = max_iter, learning_rate = lr)
-        pred, uncert = sgp.predict(X_test, 0 * X_test)
+        if args.predictor:
+            pred = model.predictor(torch.FloatTensor(X_test).to(device))
+            pred = pred.detach().cpu().numpy()
+            pred = (-pred - mean_y_train) / std_y_train
+            uncert = np.zeros_like(pred)
+        else:
+            # We fit the GP
+            M = 500
+            sgp = SparseGP(X_train, 0 * X_train, y_train, M)
+            sgp.train_via_ADAM(X_train, 0 * X_train, y_train, X_test, X_test * 0,  \
+                y_test, minibatch_size = 2 * M, max_iterations = max_iter, learning_rate = lr)
+            pred, uncert = sgp.predict(X_test, 0 * X_test)
 
         print("predictions: ", pred.reshape(-1))
         print("real values: ", y_test.reshape(-1))
@@ -204,7 +266,6 @@ for rand_idx in range(1, 11):
         testll = np.mean(sps.norm.logpdf(pred - y_test, scale = np.sqrt(uncert)))
         print('Test RMSE: ', error)
         print('Test ll: ', testll)
-
         pearson = float(pearsonr(pred.flatten(), y_test.flatten())[0])
         print('Pearson r: ', pearson)
         with open(save_dir + 'Test_RMSE_ll.txt', 'a') as test_file:
@@ -212,12 +273,61 @@ for rand_idx in range(1, 11):
 
         error_if_predict_mean = np.sqrt(np.mean((np.mean(y_train, 0) - y_test)**2))
         print('Test RMSE if predict mean: ', error_if_predict_mean)
-
-        pred, uncert = sgp.predict(X_train, 0 * X_train)
+        if args.predictor:
+            pred = model.predictor(torch.FloatTensor(X_train).to(device))
+            pred = pred.detach().cpu().numpy()
+            pred = (-pred - mean_y_train) / std_y_train
+            uncert = np.zeros_like(pred)
+        else:
+            pred, uncert = sgp.predict(X_train, 0 * X_train)
         error = np.sqrt(np.mean((pred - y_train)**2))
         trainll = np.mean(sps.norm.logpdf(pred - y_train, scale = np.sqrt(uncert)))
         print('Train RMSE: ', error)
         print('Train ll: ', trainll)
 
-        iteration += 1
+        if args.bo:
+            next_inputs = sgp.batched_greedy_ei(batch_size, np.min(X_train, 0), np.max(X_train, 0), np.mean(X_train, 0), np.std(X_train, 0), sample=sample_dist)
+            valid_arcs_final = decode_from_latent_space(torch.FloatTensor(next_inputs).to(device), model,
+                                                        500, max_n, False, data_type)
 
+            new_features = next_inputs
+            print("Evaluating selected points")
+            scores = []
+            for i in range(len(valid_arcs_final)):
+                arc = valid_arcs_final[ i ]
+                if arc is not None:
+                    score = -eva.eval(arc)
+                    score = (score - mean_y_train) / std_y_train
+                else:
+                    score = max(y_train)[ 0 ]
+                if score < best_score:
+                    best_score = score
+                    best_arc = arc
+                scores.append(score)
+                # print(i, score)
+            # print("Iteration {}'s selected arcs' scores:".format(iteration))
+            # print(scores, np.mean(scores))
+            save_object(scores, "{}scores{}.dat".format(save_dir, iteration))
+            save_object(valid_arcs_final, "{}valid_arcs_final{}.dat".format(save_dir, iteration))
+
+            if len(new_features) > 0:
+                X_train = np.concatenate([ X_train, new_features ], 0)
+                y_train = np.concatenate([ y_train, np.array(scores)[ :, None ] ], 0)
+            #
+            # print("Current iteration {}'s best score: {}".format(iteration, - best_score * std_y_train - mean_y_train))
+            if best_arc is not None: # and iteration == 10:
+                print("Best architecture: ", best_arc)
+                with open(save_dir + 'best_arc_scores.txt', 'a') as score_file:
+                    score_file.write(best_arc + ', {:.4f}\n'.format(-best_score * std_y_train - mean_y_train))
+                if data_type == 'ENAS':
+                    row = [int(x) for x in best_arc.split()]
+                    g_best, _ = decode_ENAS_to_igraph(flat_ENAS_to_nested(row, max_n-2))
+                elif data_type == 'BN':
+                    row = adjstr_to_BN(best_arc)
+                    g_best, _ = decode_BN_to_igraph(row)
+                plot_DAG(g_best, save_dir, 'best_arc_iter_{}'.format(iteration), data_type=data_type, pdf=True)
+        #
+        iteration += 1
+        # print(iteration)
+
+# pdb.set_trace()

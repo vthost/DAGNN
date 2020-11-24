@@ -30,7 +30,6 @@ LR=1e-3
 EPOCHS=50
 
 LAYERS=2
-AGG_X=0
 AGG=attn_h
 POOL_ALL=0
 POOL=max
@@ -44,7 +43,7 @@ fi
 
 python train.py --data-name asia_200k --data-type BN --save-interval $SAVE --lr $LR --save-appendix "_${NAME}" \
                 --epochs $EPOCHS --batch-size $BS --model $MODEL  --nz 56 --nvt 8 --res_dir=$RESULTS --keep-old --load-latest-model \
-                --dagnn_layers $LAYERS --dagnn_agg_x $AGG_X --dagnn_agg $AGG --bidirectional \
+                --dagnn_layers $LAYERS --dagnn_agg $AGG --bidirectional \
         --dagnn_out_pool_all $POOL_ALL --dagnn_out_pool $POOL --dagnn_dropout $DROPOUT --clip=$CLIP \
         &> $RESULTS/"${NAME}.txt"
 

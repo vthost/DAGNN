@@ -34,7 +34,6 @@ EPOCHS=100
 LR=1e-3
 
 LAYERS=2
-AGG_X=0
 AGG=attn_h
 POOL_ALL=0
 POOL=max
@@ -49,7 +48,7 @@ fi
 
 python train.py --data-name final_structures6 --data-type ENAS --save-interval $SAVE --lr $LR --save-appendix "_${NAME}" \
 		--epochs $EPOCHS --batch-size $BS --model $MODEL --nz 56 --nvt 6 --res_dir=$RESULTS --keep-old --load-latest-model \
-  	--dagnn_layers $LAYERS --dagnn_agg_x $AGG_X --dagnn_agg $AGG  \
+  	--dagnn_layers $LAYERS  --dagnn_agg $AGG  \
   	--dagnn_out_pool_all $POOL_ALL --dagnn_out_pool $POOL --dagnn_dropout $DROPOUT --clip=$CLIP  \
   	&> $RESULTS/"${NAME}.txt"
 

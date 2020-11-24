@@ -1,28 +1,27 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch_geometric as tg
-from torch_geometric.nn.glob import *
-from torch_geometric.nn.inits import glorot
-from torch_geometric.nn import MessagePassing
-from models_pyg import DVAE_PYG
-from src.utils import *
-from src.constants import *
-
 from typing import Optional
 from torch import Tensor
+import torch_geometric as tg
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
-from src.tg.batch import Batch
+from torch_scatter import scatter_add
+from torch_geometric.nn.glob import *
+from torch_geometric.nn import MessagePassing
 
-# This model uses additional node id features similar to D-VAE
+from models_pyg import DVAE_PYG
+from src.constants import *
+from batch import Batch
+
+
 class DAGNN(DVAE_PYG):
 
     def __init__(self, emb_dim, hidden_dim, out_dim,
                  max_n, nvt, START_TYPE, END_TYPE, hs, nz,
-                 num_rels=1, w_edge_attr=False, num_layers=1, bidirectional=False,
-                 agg_x=False, agg=NA_GATED_SUM, out_wx=False, out_pool_all=False, out_pool=P_SUM, encoder=None, dropout=0.0,
-                 word_vectors=None, emb_dims=[], activation=None, num_nodes=8):  # D-VAE SPECIFIC num_nodes
-        super().__init__(max_n, nvt, START_TYPE, END_TYPE, hs, nz, bidirectional=bidirectional, num_layers=num_layers) #, vid=agg==NA_SUM_GATED)
+                 num_layers=2, bidirectional=False, agg=NA_ATTN_H, out_wx=False, out_pool_all=False, out_pool=P_MAX,
+                 dropout=0.0, num_nodes=8):  # D-VAE SPECIFIC num_nodes
+        super().__init__(max_n, nvt, START_TYPE, END_TYPE, hs, nz, bidirectional=bidirectional, num_layers=num_layers)
 
         self.num_nodes = num_nodes  # D-VAE SPECIFIC
 
@@ -30,7 +29,6 @@ class DAGNN(DVAE_PYG):
 
         # configuration
         self.agg = agg
-        self.agg_x = agg_x  # use input states of predecessors instead of hidden ones
         self.agg_attn = "attn" in agg
         self.agg_attn_x = "_x" in agg
         self.bidirectional = bidirectional
@@ -43,17 +41,11 @@ class DAGNN(DVAE_PYG):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.out_hidden_dim = emb_dim + self.hidden_dim * self.num_layers if out_wx else self.hidden_dim * self.num_layers  # D-VAE SPECIFIC, USING UNIFY, no *len(self.dirs)
-        # self.out_dim = out_dim  # not needed in OGB
-
-        # initial embedding
-        self.encoder = encoder if encoder is not None else init_encoder(word_vectors, emb_dims)
 
         # aggregate
-        # agg_x makes only sense in first NN layer we could afterwards automatically use h? but postponing this...
-        # (then add pred_dim term directly when looping over layers below)
-        num_rels = 1 #num_rels if w_edge_attr else 0
-        pred_dim = self.emb_dim if self.agg_x else self.hidden_dim + num_nodes  # D-VAE SPECIFIC
-        attn_dim = self.emb_dim if "_x" in agg else self.hidden_dim + num_nodes  # D-VAE SPECIFIC
+        num_rels = 1
+        pred_dim = (self.hidden_dim + num_nodes)  # D-VAE SPECIFIC
+        attn_dim = self.emb_dim if "_x" in agg else (self.hidden_dim + num_nodes)  # D-VAE SPECIFIC
         if "self_attn" in agg:
             # it wouldn't make sense to perform attention based on h when aggregating x... so no hidden_dim needed
             self.node_aggr_0 = nn.ModuleList([
@@ -77,8 +69,7 @@ class DAGNN(DVAE_PYG):
             node_aggr = AggConv(agg, num_rels, pred_dim, reverse=True)
             self.node_aggr_1 = nn.ModuleList([node_aggr for _ in range(num_layers)])  # just to have same format
 
-
-            # RNN
+        # RNN
         self.__setattr__("cells_{}".format(0), self.grue_forward)
         if self.bidirectional:
             self.__setattr__("cells_{}".format(1), self.grue_backward)
@@ -90,7 +81,6 @@ class DAGNN(DVAE_PYG):
         self.dropout = nn.Dropout(dropout)
 
         self.out_linear = torch.nn.Linear(self.out_hidden_dim, out_dim) if self.num_layers > 1 else None
-
 
     def _out_nodes_self_attn(self, h, batch):
         attn_weights = self.self_attn_linear_out(h)
@@ -131,23 +121,11 @@ class DAGNN(DVAE_PYG):
                     le_idx = torch.cat(le_idx, dim=-1)
                     lp_edge_index = G.edge_index[:, le_idx]
 
-                    if self.agg_x:
-                        # it wouldn't make sense to perform attention based on h when aggregating x... so no h needed
-                        kwargs = {"h_attn": G.x, "h_attn_q": G.x} if self.agg_attn else {}  # just ignore query arg if self attn
-                        node_agg = self.__getattr__("node_aggr_{}".format(d))[0]
-                        ps_h = node_agg(G.x, lp_edge_index, edge_attr=None, **kwargs)[layer]
-                        # if we aggregate x...
-                        s = ps_h.shape
-                        if s[-1] < self.hidden_dim:
-                            ps_h = torch.cat([ps_h, torch.zeros(s[0], self.hidden_dim-s[1])], dim=-1)
-                        # print(G.x[lp_idx])
-                        # print(ps_h)
-
                 for i, cell in enumerate(self.__getattr__("cells_{}".format(d))):
                     # print(l_idx, i)
                     if l_idx == 0:
                         ps_h = None
-                    elif not self.agg_x:
+                    else:
                         # D-VAE SPECIFIC
                         vids = torch.zeros(G.h[d][i].shape[0], self.num_nodes).to(device)
                         idx = torch.LongTensor(list(range(G.h[d][i].shape[0]))).to(device)
@@ -248,9 +226,6 @@ class DAGNN(DVAE_PYG):
                         torch.cat(h_pred + [self._get_zeros(max_n_pred - len(h_pred), self.vs-8)], 0).unsqueeze(0)
                         for h_pred in H_pred1], dim=0)
 
-                    # d = torch.cat([g.vs[v][H_name] for g in G], dim=0)
-                    # print(d)
-                    # # {"h_attn": H_pred if self.agg_x else H_pred1, "h_attn_q": X} if self.agg_attn_x else \
                     kwargs = {} if not self.agg_attn else \
                             {"h_attn": H_pred,
                              "h_attn_q": torch.cat([g.vs[v][H_name1] for g in G], dim=0) if l > 0 else X}  # just ignore query arg if self attn
@@ -262,20 +237,6 @@ class DAGNN(DVAE_PYG):
             for i, g in enumerate(G):
                 g.vs[v][H_name] = Hv[i:i + 1]
         return Hv
-
-
-def init_encoder(word_vectors, emb_dim):
-    if word_vectors is not None:
-        return nn.EmbeddingBag.from_pretrained(word_vectors, freeze=True, mode="sum")
-    elif len(emb_dim) > 0:
-        return nn.EmbeddingBag(emb_dim[0], emb_dim[1], mode="sum")
-    return None
-
-def init_param_emb(size, device):
-    param = torch.zeros(size).to(device)
-    glorot(param)
-    # uniform(size, param)
-    return param
 
 
 class AggConv(MessagePassing):

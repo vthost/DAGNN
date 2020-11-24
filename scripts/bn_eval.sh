@@ -28,7 +28,6 @@ RESULTS="${PROJECT}/bneval${CHECK}/"
 mkdir -p $RESULTS
 
 LAYERS=2
-AGG_X=0
 AGG=attn_h
 POOL_ALL=0
 POOL=max
@@ -46,7 +45,9 @@ python bo.py \
   --data-name="asia_200k" \
   --save-appendix=$NAME --model=$MODEL --bidirectional \
   --checkpoint=$CHECK \
-  --res-dir=$RESULTS &> $RESULTS/"${NAME}.txt"
+  --res-dir=$RESULTS \
+  --dagnn_layers $LAYERS --dagnn_agg $AGG --dagnn_out_wx $OUT_WX \
+  --dagnn_out_pool_all $POOL_ALL --dagnn_out_pool $POOL --dagnn_dropout $DROPOUT &> $RESULTS/"${NAME}.txt"
 
 python summarize.py \
   --data-type=BN \

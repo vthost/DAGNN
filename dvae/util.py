@@ -7,16 +7,13 @@ from torch import nn
 import random
 from tqdm import tqdm
 import os
-import subprocess
 import collections
 import igraph
 import argparse
-import pdb
-# import pygraphviz as pgv
 import sys
+# import pygraphviz as pgv  # uncomment this for BO
 from PIL import Image
 import math
-# DAGNN
 sys.path.append('%s/../scripts/' % os.path.dirname(os.path.realpath(__file__)))
 import networkx as nx
 from torch_geometric.data import Data
@@ -42,7 +39,7 @@ def load_object(filename):
 
 
 def load_module_state(model, state_name):
-    pretrained_dict = torch.load(state_name)
+    pretrained_dict0 = torch.load(state_name)   #, map_location=torch.device('cpu')
     model_dict = model.state_dict()
 
     # to delete, to correct grud names
@@ -57,7 +54,7 @@ def load_module_state(model, state_name):
     '''
 
     # 1. filter out unnecessary keys
-    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    pretrained_dict = {k: v for k, v in pretrained_dict0.items() if k in model_dict}
 
     # 2. overwrite entries in the existing state dict
     model_dict.update(pretrained_dict) 

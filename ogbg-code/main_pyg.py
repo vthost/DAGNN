@@ -3,7 +3,6 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from torchvision import transforms
-from models.gnn import GNN
 from tqdm import tqdm
 import argparse
 import time
@@ -22,12 +21,13 @@ from utils import augment_edge, encode_y_to_arr, decode_arr_to_seq
 
 ### DAGNN
 import random
-from models.dagnn import DAGNN
-from models.gnn2 import GAT, GGNN, SAGPoolGNN
-from models.asap import ASAP
+from model.dagnn import DAGNN
+from model.gnn import GNN
+from model.gnn2 import GAT, GGNN, GGNN_Simple, SAGPoolGNN  #DGCNN, GAT, UNet, DiffPoolGNN, GGNN
+from model.asap import ASAP
 from src.constants import *
-from src.tg.dataloader import DataLoader
-from src.tg.data_parallel import DataParallel
+from tg.dataloader import DataLoader
+from tg.data_parallel import DataParallel
 ###
 import pandas as pd
 # make sure summary_report is imported after src.utils (also from dependencies)
@@ -157,8 +157,8 @@ def main():
     parser.add_argument('--dagnn_wea', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_layers', type=int, default=2)
     parser.add_argument('--dagnn_bidir', type=int, default=1, choices=[0, 1])
-    parser.add_argument('--dagnn_agg_x', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_agg', type=str, default=NA_ATTN_H)
+    parser.add_argument('--dagnn_out_wx', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_out_pool_all', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_MAX, P_MEAN, P_ADD])
     parser.add_argument('--dagnn_dropout', type=float, default=0.0)
@@ -214,11 +214,6 @@ def main():
 
     split_idx = dataset.get_idx_split()
 
-    # tidx = split_idx['train']
-    # idx = [i for i in range(len(tidx)) if i%10 == 0 or i%1 == 0]
-    # idx = random.sample(range(0, len(tidx)-1), int(len(tidx)*0.15))
-    # pd.DataFrame(tidx[idx], columns=["dummy"]).to_csv(os.path.join("dataset", "train15.csv.gz"), index=False, compression="gzip", header=None)
-    # print(len(idx))
     if args.train_idx:
         train_idx = pd.read_csv(os.path.join("dataset", args.train_idx + ".csv.gz"), compression="gzip", header=None).values.T[0]
         train_idx = torch.tensor(train_idx, dtype = torch.long)
@@ -227,6 +222,12 @@ def main():
     ### building vocabulary for sequence predition. Only use training data.
 
     vocab2idx, idx2vocab = get_vocab_mapping([dataset.data.y[i] for i in split_idx['train']], args.num_vocab)
+
+    if not torch.cuda.is_available():
+        # args.num_vocab = 69
+        split_idx['train'] = list(range(50))
+        split_idx['valid'] = list(range(50, 60))
+        split_idx['test'] = list(range(60, 70))
 
     ### set the transform function
     # augment_edge: add next-token edge as well as inverse edges. add edge attributes.
@@ -355,8 +356,6 @@ def main():
         test_results += [test_curve[best_val_epoch]]
 
         results = list(summary_report(train_results)) + list(summary_report(valid_results)) + list(summary_report(test_results))
-        # with open(res_file, 'a') as f:
-        #     f.writelines(str(fold)+ ",_," + ",".join([str(v) for v in results]) + "\n")
         print(",".join([str(v) for v in results]))
 
     results = list(summary_report(train_results)) + list(summary_report(valid_results)) + list(summary_report(test_results))
@@ -386,24 +385,20 @@ def init_model(args, vocab2idx, node_encoder):
         model = GNN(num_vocab=len(vocab2idx), max_seq_len=args.max_seq_len, node_encoder=node_encoder,
                     num_layer=args.num_layer, gnn_type='gcn', emb_dim=args.emb_dim, drop_ratio=args.drop_ratio,
                     virtual_node=True)
-    elif args.gnn == 'ggnn':
-        model = GGNN(num_vocab=len(vocab2idx), max_seq_len=args.max_seq_len, node_encoder=node_encoder,
-                     emb_dim=args.emb_dim)
+    elif args.gnn == 'ggnns':
+        model = GGNN_Simple(num_vocab=len(vocab2idx), max_seq_len=args.max_seq_len, node_encoder=node_encoder,
+                            emb_dim=args.emb_dim)
     elif args.gnn == 'gat':
         model = GAT(num_vocab=len(vocab2idx), max_seq_len=args.max_seq_len, node_encoder=node_encoder,
                     emb_dim=args.emb_dim, num_layers=args.num_layer)
     elif args.gnn == 'sagpool':
         model = SAGPoolGNN(num_vocab=len(vocab2idx), max_seq_len=args.max_seq_len, node_encoder=node_encoder, emb_dim=args.emb_dim, num_layers=args.num_layer)
-    elif args.gnn == 'asap':
-        model = ASAP(len(vocab2idx), args.max_seq_len, node_encoder, args.emb_dim, args.num_layer,
-                     args.emb_dim)
-
     elif args.gnn == "dagnn":
        model = DAGNN(num_vocab=len(vocab2idx), max_seq_len=args.max_seq_len, emb_dim=args.emb_dim,
                    hidden_dim=args.emb_dim, out_dim=None, encoder=node_encoder,
                    w_edge_attr=args.dagnn_wea, num_layers=args.dagnn_layers, bidirectional=args.dagnn_bidir,
-                   agg=args.dagnn_agg, agg_x=args.dagnn_agg_x > 0, mapper_bias=args.dagnn_mapper_bias > 0,
-                   out_pool_all=args.dagnn_out_pool_all, out_pool=args.dagnn_out_pool,
+                   agg=args.dagnn_agg, mapper_bias=args.dagnn_mapper_bias > 0,
+                   out_wx=args.dagnn_out_wx > 0, out_pool_all=args.dagnn_out_pool_all, out_pool=args.dagnn_out_pool,
                    dropout=args.dagnn_dropout)
     else:
         raise ValueError('Invalid GNN type')

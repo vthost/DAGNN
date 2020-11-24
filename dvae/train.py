@@ -4,17 +4,23 @@ from torch import nn, optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import scipy.io
 from random import shuffle
-import matplotlib
-matplotlib.use('agg')
 from util import *
+from models import *
 from dagnn import DAGNN
 from dagnn_bn import DAGNN_BN
 from src.constants import *
 import copy
 
+# m='DAGNN_BN'
+# m='DVAE_BN' #47.095159912109374
+# m='DVAE_BN_PYG' #loss: 47.095159912109374
+# m='DAGNN_BN'   # 46.940618896484374
+# d='asia_200k'
 
-m='DAGNN_BN'
-d='asia_200k'
+# m='DVAE_PYG' #
+# # m='DVAE'
+m='DAGNN'
+d ='final_structures6'
 
 parser = argparse.ArgumentParser(description='Train Variational Autoencoders for DAGs')
 # general settings
@@ -50,7 +56,7 @@ parser.add_argument('--hs', type=int, default=501, metavar='N',
                     help='hidden size of GRUs')
 parser.add_argument('--nz', type=int, default=56, metavar='N',
                     help='number of dimensions of latent vectors z')
-parser.add_argument('--bidirectional', action='store_true', default=False,
+parser.add_argument('--bidirectional', action='store_true', default=False if d == 'asia_200k' else True,  # USE ONLY WITH NNs as in paper
                     help='whether to use bidirectional encoding')
 parser.add_argument('--predictor', action='store_true', default=False,
                     help='whether to train a performance predictor from latent\
@@ -71,10 +77,15 @@ parser.add_argument('--all-gpus', action='store_true', default=False,
 parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 
+# parser.add_argument('--dagnn_agg_x', type=int, default=1 if d == 'asia_200k' else 0, choices=[0, 1])
+# BN agg_x works not with max/sum, attn
+# gated works, and only works with agg_x (because of parent layers used)
+# attn x/h works with non-agg_x
+
 parser.add_argument('--dagnn_layers', type=int, default=2)
-parser.add_argument('--dagnn_agg_x', type=int, default=0, choices=[0, 1])
 parser.add_argument('--dagnn_agg', type=str, default=NA_ATTN_H)
-parser.add_argument('--dagnn_out_pool_all', type=int, default=0, choices=[0, 1])
+parser.add_argument('--dagnn_out_wx', type=int, default=0, choices=[0, 1])
+parser.add_argument('--dagnn_out_pool_all', type=int, default=0 if d == 'asia_200k' else 0, choices=[0, 1])
 parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_MAX, P_MEAN, P_ADD])
 parser.add_argument('--dagnn_dropout', type=float, default=0.0)
 
@@ -130,22 +141,6 @@ else:
     with open(pkl_name, 'wb') as f:
         pickle.dump((train_data, test_data, graph_args), f)
 
-# delete old files in the result directory
-# if not args.keep_old: mat?
-#     remove_list = [f for f in os.listdir(args.res_dir) if not f.endswith(".pkl") and
-#             not f.startswith('train_graph') and not f.startswith('test_graph') and
-#             not f.endswith('.pth') and
-#             not f.endswith('loss.txt')]
-#     for f in remove_list:
-#         tmp = os.path.join(args.res_dir, f)
-#         if not os.path.isdir(tmp):
-#             os.remove(tmp)
-
-# if not args.keep_old:
-#     # backup current .py files
-#     copy('train.py', args.res_dir)
-#     copy('models.py', args.res_dir)
-#     copy('util.py', args.res_dir)
 
 # save command line input
 cmd_input = 'python ' + ' '.join(sys.argv) + '\n'
@@ -163,7 +158,7 @@ if args.small_train:
 
 '''Prepare the model'''
 # model
-if args.model.startswith("DAGNN_BN"):
+if args.model.startswith("DAGNN"):
     model = eval(args.model)(args.nvt + 2, args.hs, args.hs,
                   graph_args.max_n,
                   graph_args.num_vertex_type,
@@ -171,23 +166,10 @@ if args.model.startswith("DAGNN_BN"):
                   graph_args.END_TYPE,
                   hs=args.hs,
                   nz=args.nz,
-                  num_nodes=args.nvt+2, w_edge_attr=False, num_rels=1,
-                  agg=args.dagnn_agg, agg_x= args.dagnn_agg_x > 0,  # args.dagnn_agg
+                  num_nodes=args.nvt+2,
+                  agg=args.dagnn_agg,
                   num_layers=args.dagnn_layers, bidirectional=args.bidirectional,
-                  out_pool_all=args.dagnn_out_pool_all, out_pool=args.dagnn_out_pool,
-                  dropout=args.dagnn_dropout)
-elif args.model.startswith("DAGNN"):
-    model = eval(args.model)(args.nvt + 2, args.hs, args.hs,
-                  graph_args.max_n,
-                  graph_args.num_vertex_type,
-                  graph_args.START_TYPE,
-                  graph_args.END_TYPE,
-                  hs=args.hs,
-                  nz=args.nz,
-                  num_nodes=args.nvt+2, w_edge_attr=False, num_rels=1,
-                  agg=args.dagnn_agg, agg_x= args.dagnn_agg_x > 0,  # args.dagnn_agg
-                  num_layers=args.dagnn_layers, bidirectional=args.bidirectional,
-                out_pool_all=args.dagnn_out_pool_all, out_pool=args.dagnn_out_pool,
+                  out_wx=args.dagnn_out_wx > 0, out_pool_all=args.dagnn_out_pool_all, out_pool=args.dagnn_out_pool,
                   dropout=args.dagnn_dropout)
 else:
     model = eval(args.model)(
@@ -314,7 +296,6 @@ def test():
             _, nll, _ = model.loss(mu, logvar, g)
             pbar.set_description('nll: {:.4f}'.format(nll.item()/len(g_batch)))
             Nll += nll.item()
-
             g_batch = []
             y_batch = []
     Nll /= len(test_data)
@@ -339,7 +320,7 @@ def extract_latent(data):
         if args.model.startswith('SVAE'):
             g_ = g.to(device)
         elif args.model.startswith('DVAE') or args.model.startswith('DAGNN'):
-            # copy igraph
+            # copy graph
             # otherwise original igraphs will save the H states and consume more GPU memory
             g_ = copy.deepcopy(g)
         g_batch.append(g_)
@@ -387,7 +368,6 @@ if os.path.exists(loss_name) and not args.keep_old:
 
 if args.only_test:
     epoch = args.continue_from
-    # pdb.set_trace()
 
 start_epoch = args.continue_from if args.continue_from is not None else 0
 for epoch in range(start_epoch + 1, args.epochs + 1):
@@ -420,6 +400,7 @@ for epoch in range(start_epoch + 1, args.epochs + 1):
         print("extract latent representations...")
         save_latent_representations(epoch)
 
+
 print("TRAIN TIME", datetime.datetime.now()-time)
 '''Testing begins here'''
 if args.predictor:
@@ -433,3 +414,4 @@ with open(test_results_name, 'a') as result_file:
             epoch, Nll, acc, r_valid) + 
             " r_unique: {:.4f} r_novel: {:.4f} pred_rmse: {:.4f}\n".format(
             r_unique, r_novel, pred_rmse))
+

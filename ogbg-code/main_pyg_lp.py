@@ -1,27 +1,36 @@
-
+import torch
+# from torch_geometric.data import DataLoader
 import torch.optim as optim
 import torch.nn.functional as F
 from torchvision import transforms
-from models.gnn import GNN
+from model.gnn import GNN
 from tqdm import tqdm
 import argparse
+import time
 import numpy as np
+import pandas as pd
+import os
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 ### importing OGB
 from ogb.graphproppred import Evaluator, PygGraphPropPredDataset
 
+### importing utils
+from utils import ASTNodeEncoder, get_vocab_mapping
 ### for data transform
-from utils import augment_edge
+from utils import augment_edge, encode_y_to_arr, decode_arr_to_seq
+from utils2 import ASTNodeEncoder2
 ### DAGNN
 import random
-from models.dagnn import DAGNN
-from models.gnn2 import GAT, GGNN, SAGPoolGNN
-from models.asap import ASAP
+from dagnn import DAGNN
+from model.gnn2 import GAT, GGNN_Simple, SAGPoolGNN  #, DGCNN, GAT, UNet, DiffPoolGNN, GGNN
+from model.asap import ASAP
+from utils2 import augment_edge2
 from src.constants import *
-from torch_geometric.data import DataLoader
-from src.tg.dataloader import DataLoader
-from src.tg.data_parallel import DataParallel
+from torch_geometric.data import DataLoader, DataListLoader
+# from torch_geometric.nn import DataParallel
+from tg.dataloader import DataLoader
+from tg.data_parallel import DataParallel
 ###
 import pandas as pd
 # make sure summary_report is imported after src.utils (also from dependencies)
@@ -76,7 +85,11 @@ def eval(model, device, loader, evaluator):
         if batch:
             with torch.no_grad():
                 pred = model(batch)
-
+            # m = [b.len_longest_path.detach().cpu() for b in batch]
+            # d = []
+            # for b in batch:
+            #     d += b.to_data_list()
+            # d = [dd.node_depth.max().item() for dd in d]
             y_true1 = [b.len_longest_path.view(-1,1).detach().cpu() for b in batch]
             y_true += y_true1
 
@@ -99,7 +112,7 @@ def main():
     parser = argparse.ArgumentParser(description='GNN baselines on ogbg-code data with Pytorch Geometrics')
     parser.add_argument('--device', type=int, default=0,
                         help='which gpu to use if any (default: 0)')
-    parser.add_argument('--gnn', type=str, default="dagnn",
+    parser.add_argument('--gnn', type=str, default="gcn",  #M_DAGNN_GRU,
                         help='GNN gin, gin-virtual, or gcn, or gcn-virtual (default: gcn-virtual)')
     parser.add_argument('--drop_ratio', type=float, default=0,
                         help='dropout ratio (default: 0)')
@@ -127,17 +140,16 @@ def main():
     parser.add_argument('--dagnn_wea', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_layers', type=int, default=1)
     parser.add_argument('--dagnn_bidir', type=int, default=0, choices=[0, 1])
-    parser.add_argument('--dagnn_agg_x', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_agg', type=str, default=NA_GATED_SUM)
+    parser.add_argument('--dagnn_out_wx', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_out_pool_all', type=int, default=0, choices=[0, 1])
     parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_MAX, P_MEAN, P_ADD])
     parser.add_argument('--dagnn_dropout', type=float, default=0.0)
     parser.add_argument('--dagnn_mapper_bias', type=int, default=1, choices=[0, 1])
-    parser.add_argument('--dagnn_dense', type=int, default=0, choices=[0, 1])
 
     parser.add_argument('--dir_data', type=str, default=None,
                         help='... dir')
-    parser.add_argument('--dir_results', type=str, default=DIR_LPRESULTS,
+    parser.add_argument('--dir_results', type=str, default=DIR_RESULTS,
                         help='results dir')
     parser.add_argument('--dir_save', default=DIR_SAVED_MODELS,
                         help='directory to save checkpoints in')
@@ -184,10 +196,18 @@ def main():
         train_idx = torch.tensor(train_idx, dtype = torch.long)
         split_idx['train'] = train_idx
 
+    if not torch.cuda.is_available():
+        # args.num_vocab = 69
+        split_idx['train'] = list(range(50))
+        split_idx['valid'] = list(range(50, 60))
+        split_idx['test'] = list(range(60, 70))
+
     ### set the transform function
+    # augment_edge: add next-token edge as well as inverse edges. add edge attributes.
+    # encode_y_to_arr: add y_arr to PyG data object, indicating the array representation of a sequence.
     # DAGNN
     augment = augment_edge2 if "dagnn" in args.gnn else augment_edge
-    dataset.transform = transforms.Compose([augment])
+    dataset.transform = transforms.Compose([augment])  #, lambda data: encode_y_to_arr(data)])
 
     ### automatic acc evaluator. takes dataset name as input
     evaluator = Evaluator("ogbg-ppa")
@@ -313,15 +333,15 @@ def main():
         f.writelines(str(fold) + ",_," + ",".join([str(v) for v in results]) + "\n")
         # print(",".join([str(v) for v in results]))
 
-    # we might want to add folds
+    # we might want to add folds later
     # if args.checkpointing:
     #     remove_checkpoint(checkpoint_fn)
 
 
 def init_model(args, node_encoder, numclass=275):
     # this was only relevant for regression version
-    n = 1 #len(vocab2idx)
-    m = 1 #args.max_seq_len
+    n = 1
+    m = 1
     if args.gnn == 'gin':
         model = GNN(num_vocab=n, max_seq_len=m, node_encoder=node_encoder,
                     num_layer=args.num_layer, gnn_type='gin', emb_dim=args.emb_dim, drop_ratio=args.drop_ratio,
@@ -339,24 +359,22 @@ def init_model(args, node_encoder, numclass=275):
                     num_layer=args.num_layer, gnn_type='gcn', emb_dim=args.emb_dim, drop_ratio=args.drop_ratio,
                     virtual_node=True, num_class=numclass)
     elif args.gnn == 'ggnn':
-        model = GGNN(num_vocab=n, max_seq_len=m, node_encoder=node_encoder,
-                     emb_dim=args.emb_dim, num_class=numclass)
+        model = GGNN_Simple(num_vocab=n, max_seq_len=m, node_encoder=node_encoder,
+                            emb_dim=args.emb_dim, num_class=numclass)
     elif args.gnn == 'gat':
         model = GAT(num_vocab=n, max_seq_len=m, node_encoder=node_encoder,
                     emb_dim=args.emb_dim, num_layers=args.num_layer, num_class=numclass)
     elif args.gnn == 'sagpool':
         model = SAGPoolGNN(num_vocab=n, max_seq_len=m, node_encoder=node_encoder, emb_dim=args.emb_dim, num_layers=args.num_layer, num_class=numclass)
-    elif args.gnn == 'asap':
+    elif args.gnn == 'asapool':
         model = ASAP(n, m, node_encoder, args.emb_dim, args.num_layer,
                      args.emb_dim, num_class=numclass)
-
     elif "dagnn" in args.gnn:
-
         model = DAGNN(num_vocab=n, max_seq_len=m, emb_dim=args.emb_dim,
                    hidden_dim=args.emb_dim, out_dim=None, encoder=node_encoder,
                    w_edge_attr=args.dagnn_wea, num_layers=args.dagnn_layers, bidirectional=args.dagnn_bidir,
-                   agg=args.dagnn_agg, agg_x=args.dagnn_agg_x > 0, mapper_bias=args.dagnn_mapper_bias > 0,
-                   out_pool_all=args.dagnn_out_pool_all, out_pool=args.dagnn_out_pool,
+                   agg=args.dagnn_agg, mapper_bias=args.dagnn_mapper_bias > 0,
+                   out_wx=args.dagnn_out_wx > 0, out_pool_all=args.dagnn_out_pool_all, out_pool=args.dagnn_out_pool,
                    dropout=args.dagnn_dropout, num_class=numclass)
     else:
         raise ValueError('Invalid GNN type')

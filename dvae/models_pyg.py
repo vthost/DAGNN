@@ -8,6 +8,7 @@ import numpy as np
 import igraph
 import pdb
 import copy
+from torch_geometric.data import Data
 # This file implements several VAE models for DAGs, including SVAE, GraphRNN, DVAE, GCN etc.
 
 '''
@@ -168,6 +169,9 @@ class DVAE_PYG(nn.Module):
                 if max_n_pred == 0:
                     H = self._get_zero_hidden(len(G))
                 else:
+                    # H_pred = [torch.cat(h_pred +
+                    #             [self._get_zeros(max_n_pred - len(h_pred), self.vs)], 0).unsqueeze(0)
+                    #             for h_pred in H_pred]  # pad all to same length
                     H_pred = [torch.cat(h_pred +[self._get_zeros(max_n_pred - len(h_pred), self.vs)], 0).unsqueeze(0)
                               for h_pred in H_pred]
                     H_pred = torch.cat(H_pred, 0)  # batch * max_n_pred * vs
@@ -331,6 +335,65 @@ class DVAE_PYG(nn.Module):
         # in most cases, H0 need not be explicitly included since Hvi and H contain its information
         return self.sigmoid(self.add_edge(torch.cat([Hvi, H], -1)))
 
+    def decode(self, z, stochastic=True):
+        # decode latent vectors z back to graphs
+        # if stochastic=True, stochastically sample each action from the predicted distribution;
+        # otherwise, select argmax action deterministically.
+        H0 = self.tanh(self.fc3(z))  # or relu activation, similar performance
+        G = [igraph.Graph(directed=True) for _ in range(len(z))]
+        for g in G:
+            g.add_vertex(type=self.START_TYPE)
+        self._update_iv(G, 0, H0)
+        finished = [False] * len(G)
+        for idx in range(1, self.max_n):
+            # decide the type of the next added vertex
+            if idx == self.max_n - 1:  # force the last node to be end_type
+                new_types = [self.END_TYPE] * len(G)
+            else:
+                Hg = self._get_igraph_state(G, decode=True)
+                type_scores = self.add_vertex(Hg)
+                if stochastic:
+                    type_probs = F.softmax(type_scores, 1).cpu().detach().numpy()
+                    new_types = [np.random.choice(range(self.nvt), p=type_probs[i])
+                                 for i in range(len(G))]
+                else:
+                    new_types = torch.argmax(type_scores, 1)
+                    new_types = new_types.flatten().tolist()
+            for i, g in enumerate(G):
+                if not finished[i]:
+                    g.add_vertex(type=new_types[i])
+            self._update_iv(G, idx)
+
+            # decide connections
+            edge_scores = []
+            for vi in range(idx-1, -1, -1):
+                Hvi = self._get_ivertex_state(G, vi)
+                H = self._get_ivertex_state(G, idx)
+                ei_score = self._get_edge_score(Hvi, H, H0)
+                if stochastic:
+                    random_score = torch.rand_like(ei_score)
+                    decisions = random_score < ei_score
+                else:
+                    decisions = ei_score > 0.5
+                for i, g in enumerate(G):
+                    if finished[i]:
+                        continue
+                    if new_types[i] == self.END_TYPE:
+                    # if new node is end_type, connect it to all loose-end vertices (out_degree==0)
+                        end_vertices = set([v.index for v in g.vs.select(_outdegree_eq=0)
+                                            if v.index != g.vcount()-1])
+                        for v in end_vertices:
+                            g.add_edge(v, g.vcount()-1)
+                        finished[i] = True
+                        continue
+                    if decisions[i, 0]:
+                        g.add_edge(vi, g.vcount()-1)
+                self._update_iv(G, idx)
+
+        for l in range(self.num_layers):
+            for g in G:
+                del g.vs['H_forward'+ str(l)]  # delete hidden states to save GPU memory
+        return G
 
     def loss(self, mu, logvar, G_true, beta=0.005):
         # compute the loss of decoding mu and logvar to true graphs using teacher forcing
@@ -392,11 +455,80 @@ class DVAE_PYG(nn.Module):
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         return res + beta*kld, res, kld
 
+    # def loss(self, mu, logvar, G_true, beta=0.005):
+    #     # compute the loss of decoding mu and logvar to true graphs using teacher forcing
+    #     # ensure when computing the loss of step i, steps 0 to i-1 are correct
+    #     z = self.reparameterize(mu, logvar)
+    #     H0 = self.tanh(self.fc3(z))  # or relu activation, similar performance
+    #     G = [igraph.Graph(directed=True) for _ in range(len(z))]
+    #     for g in G:
+    #         g.add_vertex(type=self.START_TYPE)
+    #     self._update_v(G, 0, H0)
+    #     res = 0  # log likelihood
+    #     for v_true in range(1, self.max_n):
+    #         # calculate the likelihood of adding true types of nodes
+    #         # use start type to denote padding vertices since start type only appears for vertex 0
+    #         # and will never be a true type for later vertices, thus it's free to use
+    #         true_types = [g_true.vs[v_true]['type'] if v_true < g_true.vcount()
+    #                       else self.START_TYPE for g_true in G_true]
+    #         Hg = self._get_graph_state(G, decode=True)
+    #         type_scores = self.add_vertex(Hg)
+    #         # vertex log likelihood
+    #         vll = self.logsoftmax1(type_scores)[np.arange(len(G)), true_types].sum()
+    #         res = res + vll
+    #         for i, g in enumerate(G):
+    #             if true_types[i] != self.START_TYPE:
+    #                 g.add_vertex(type=true_types[i])
+    #         self._update_v(G, v_true)
+    #
+    #         # calculate the likelihood of adding true edges
+    #         true_edges = []
+    #         for i, g_true in enumerate(G_true):
+    #             # l = g_true.get_adjlist(igraph.IN)[v_true] if v_true < g_true.vcount() else []
+    #             # print(l)
+    #             # if len(l) > 1:
+    #             #     print(l)
+    #             true_edges.append(g_true.get_adjlist(igraph.IN)[v_true] if v_true < g_true.vcount()
+    #                               else [])
+    #         edge_scores = []
+    #         for vi in range(v_true - 1, -1, -1):
+    #             Hvi = self._get_vertex_state(G, vi)
+    #             H = self._get_vertex_state(G, v_true)
+    #             ei_score = self._get_edge_score(Hvi, H, H0)
+    #             edge_scores.append(ei_score)
+    #             for i, g in enumerate(G):
+    #                 if vi in true_edges[i]:
+    #                     g.add_edge(vi, v_true)
+    #             self._update_v(G, v_true)
+    #         edge_scores = torch.cat(edge_scores[::-1], 1)
+    #
+    #         ground_truth = torch.zeros_like(edge_scores)
+    #         idx1 = [i for i, x in enumerate(true_edges) for _ in range(len(x))]
+    #         idx2 = [xx for x in true_edges for xx in x]
+    #         ground_truth[idx1, idx2] = 1.0
+    #
+    #         # edges log-likelihood
+    #         ell = - F.binary_cross_entropy(edge_scores, ground_truth, reduction='sum')
+    #         res = res + ell
+    #
+    #     res = -res  # convert likelihood to loss
+    #     kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    #     return res + beta * kld, res, kld
+
+    # def encode_decode(self, G):
+    #     mu, logvar = self.encode(G)
+    #     z = self.reparameterize(mu, logvar)
+    #     return self.decode(z)
+
     def forward(self, G):
         mu, logvar = self.encode(G)
         loss, _, _ = self.loss(mu, logvar, G)
         return loss
-
+    
+    # def generate_sample(self, n):
+    #     sample = torch.randn(n, self.nz).to(self.get_device())
+    #     G = self.decode(sample)
+    #     return G
 
 
 '''
@@ -408,19 +540,19 @@ class DVAE_BN_PYG(DVAE_PYG):
     def __init__(self, max_n, nvt, START_TYPE, END_TYPE, hs=501, nz=56, bidirectional=False, num_layers=1, aggx=1):
         super(DVAE_BN_PYG, self).__init__(max_n, nvt, START_TYPE, END_TYPE, hs, nz, bidirectional, vid=False, num_layers=num_layers)
         self.mapper_forward = nn.ModuleList([nn.Sequential(
-                nn.Linear(self.nvt if aggx else hs, hs, bias=False),  #nn.Linear(self.nvt, hs, bias=False),
+                nn.Linear(self.nvt if aggx or l==0 else hs, hs, bias=False),  #nn.Linear(self.nvt, hs, bias=False),
                 ) for l in range(num_layers)]) # disable bias to ensure padded zeros also mapped to zeros
         self.mapper_backward = nn.ModuleList([nn.Sequential(
-                nn.Linear(self.nvt if aggx else hs, hs, bias=False),
-                ) for _ in range(num_layers)])
+                nn.Linear(self.nvt if aggx or l==0 else hs, hs, bias=False),
+                ) for l in range(num_layers)])
         self.gate_forward = nn.ModuleList([nn.Sequential(
-                nn.Linear(self.nvt if aggx else hs, hs),
+                nn.Linear(self.nvt if aggx or l==0 else hs, hs),
                 nn.Sigmoid()
-                ) for _ in range(num_layers)])
+                ) for l in range(num_layers)])
         self.gate_backward = nn.ModuleList([nn.Sequential(
-                nn.Linear(self.nvt if aggx else hs, hs),
+                nn.Linear(self.nvt if aggx or l==0 else hs, hs),
                 nn.Sigmoid()
-                ) for _ in range(num_layers)])
+                ) for l in range(num_layers)])
         self.add_edge = nn.Sequential(
                 nn.Linear(hs * 3, hs), 
                 nn.ReLU(), 
@@ -490,26 +622,35 @@ class DVAE_BN_PYG(DVAE_PYG):
         if H is not None:
             idx = [i for i, g in enumerate(G) if g.x.shape[0] > v]
             H = H[idx]
-
+        # v_types = [g.vs[v]['type'] for g in G]
+        # X = self._one_hot(v_types, self.nvt)
         X = torch.stack([g.x[v] for g in G], dim=0)
         Hv=X
         for l in range(self.num_layers):
             istr = str(l)
             if reverse:
                 H_name = 'H_backward'+istr  # name of the hidden states attribute
+                # H_pred = [[self._one_hot(g.vs[x]['type'], self.nvt) for x in g.successors(v)]
+                #           for g in G]
                 H_pred = []
                 for g in G:
                     np_idx = g.edge_index[0] == v
                     np_idx = g.edge_index[1][np_idx]
+                    # np_idx = g.bi_node_parent_index[1][0] == v
+                    # np_idx = g.bi_node_parent_index[1][1][np_idx]
                     H_pred += [g.x[np_idx]]
 
                 gate, mapper = self.gate_backward, self.mapper_backward
             else:
                 H_name = 'H_forward'+istr  # name of the hidden states attribute
+                # H_pred = [[self._one_hot(g.vs[x]['type'], self.nvt) for x in g.predecessors(v)]
+                #           for g in G]
                 H_pred = []
                 for g in G:
                     np_idx = g.edge_index[1] == v
                     np_idx = g.edge_index[0][np_idx]
+                    # np_idx = g.bi_node_parent_index[0][0] == v
+                    # np_idx = g.bi_node_parent_index[0][1][np_idx]
                     H_pred += [g.x[np_idx]]
                 gate, mapper = self.gate_forward, self.mapper_forward
             # if h is not provided, use gated sum of v's predecessors' states as the input hidden state
@@ -518,12 +659,19 @@ class DVAE_BN_PYG(DVAE_PYG):
                 if max_n_pred == 0:
                     H = self._get_zero_hidden(len(G))
                 else:
+                    # H_pred = [torch.cat(h_pred +
+                    #           [self._get_zero_x((max_n_pred - len(h_pred)))], 0).unsqueeze(0)
+                    #           for h_pred in H_pred]
                     H_pred = [torch.cat([h_pred, self._get_zero_x((max_n_pred - h_pred.shape[0]))], 0).unsqueeze(0)
                               for h_pred in H_pred]
                     H_pred = torch.cat(H_pred, 0)  # batch * max_n_pred * hs
-                    H = self._gated(H_pred, gate[l], mapper[l]).sum(1)  # batch * hs
-
+                    H = self._gated(H_pred, gate[l], mapper[l]) #.sum(1)  # batch * hs
+                    # print('gated3', H.shape)
+                    # print(H)
+                    H = H.sum(1)
+                    # print("h:\n",H)
             Hv = propagator[l](Hv, H)
+            # print("r:\n",Hv)
             for i, g in enumerate(G):
                 g.vs[v][H_name] = Hv[i:i+1]
         return Hv
@@ -570,7 +718,8 @@ class DVAE_BN_PYG(DVAE_PYG):
         # encode graphs G into latent vectors
         if type(G) != list:
             G = [G]
-
+        # for g in G:
+        #     g.vs = [{} for _ in range(g.x.shape[0])]
         self._propagate_from(G, 0, self.grue_forward, H0=self._get_zero_hidden(len(G)),
                              reverse=False)
         if self.bidir:

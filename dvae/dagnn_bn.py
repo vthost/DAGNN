@@ -1,35 +1,33 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch_geometric as tg
-from torch_geometric.nn.glob import *
-from torch_geometric.nn.inits import glorot
-from torch_geometric.nn import MessagePassing
-from models_pyg import DVAE_BN_PYG
-from src.utils import *
-from src.constants import *
-
 from typing import Optional
 from torch import Tensor
+import torch_geometric as tg
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import softmax
-from src.tg.batch import Batch
+from torch_geometric.nn.glob import *
+from torch_geometric.nn import MessagePassing
+
+from models_pyg import DVAE_BN_PYG
+from src.constants import *
+from batch import Batch
+
 
 # this model just uses specific D-VAE methods for decoding if X is used for aggregation etc
 # can use other model otherwise..
 class DAGNN_BN(DVAE_BN_PYG):
 
     def __init__(self, emb_dim, hidden_dim, out_dim,
-                 max_n, nvt, START_TYPE, END_TYPE, hs, nz,
-                 num_rels=1, w_edge_attr=False, num_layers=1, bidirectional=False,
-                 agg_x=False, agg=NA_GATED_SUM, out_wx=False, out_pool_all=False, out_pool=P_SUM, encoder=None, dropout=0.0,
-                 word_vectors=None, emb_dims=[], activation=None, num_nodes=8):  # D-VAE SPECIFIC num_nodes
-        super().__init__(max_n, nvt, START_TYPE, END_TYPE, hs, nz, bidirectional=bidirectional, num_layers=num_layers, aggx=agg_x) #, vid=agg==NA_SUM_GATED)
+                 max_n, nvt, START_TYPE, END_TYPE, hs, nz, num_layers=2, bidirectional=True,
+                 agg=NA_ATTN_H, out_wx=False, out_pool_all=False, out_pool=P_MAX, dropout=0.0,
+                 num_nodes=8):  # D-VAE SPECIFIC num_nodes
+        super().__init__(max_n, nvt, START_TYPE, END_TYPE, hs, nz, bidirectional=bidirectional, num_layers=num_layers, aggx=0)
 
         self.num_nodes = num_nodes  # D-VAE SPECIFIC
 
         # configuration
         self.agg = agg
-        self.agg_x = agg_x  # use input states of predecessors instead of hidden ones
         self.agg_attn = "attn" in agg
         self.agg_attn_x = "_x" in agg
         self.bidirectional = bidirectional
@@ -44,14 +42,9 @@ class DAGNN_BN(DVAE_BN_PYG):
         self.out_hidden_dim = emb_dim + self.hidden_dim * self.num_layers if out_wx else self.hidden_dim * self.num_layers  # D-VAE SPECIFIC, USING UNIFY, no *len(self.dirs)
         # self.out_dim = out_dim  # not needed in OGB
 
-        # initial embedding
-        self.encoder = encoder if encoder is not None else init_encoder(word_vectors, emb_dims)
-
         # aggregate
-        # agg_x makes only sense in first NN layer we could afterwards automatically use h? but postponing this...
-        # (then add pred_dim term directly when looping over layers below)
-        num_rels = 1 #num_rels if w_edge_attr else 0
-        pred_dim = self.emb_dim if self.agg_x else self.hidden_dim
+        num_rels = 1
+        pred_dim = self.hidden_dim
         attn_dim = self.emb_dim if "_x" in agg else self.hidden_dim
         if "self_attn" in agg:
             # it wouldn't make sense to perform attention based on h when aggregating x... so no hidden_dim needed
@@ -84,11 +77,9 @@ class DAGNN_BN(DVAE_BN_PYG):
         self._readout = self._out_nodes_self_attn if out_pool == P_ATTN else getattr(tg.nn, 'global_{}_pool'.format(out_pool))
 
         # output
-        # self.out_norm = nn.LayerNorm(self.out_hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
         self.out_linear = torch.nn.Linear(self.out_hidden_dim, out_dim) if self.num_layers > 1 else None
-        # self.activation = init_activation(activation, out_dim)
 
     def _out_nodes_self_attn(self, h, batch):
         attn_weights = self.self_attn_linear_out(h)
@@ -107,12 +98,9 @@ class DAGNN_BN(DVAE_BN_PYG):
     def forward(self, G):
         device = self.get_device()
         G = G.to(device)
-        # G.x = G.x.to(self.device)
 
         num_nodes_batch = G.x.shape[0]
         num_layers_batch = max(G.bi_layer_index[0][0]).item() + 1
-
-        # G.x = self.encoder(G.x, G.node_depth.view(-1, ))
 
         G.h = [[torch.zeros(num_nodes_batch, self.hidden_dim).to(device)
                 for _ in self.__getattr__("cells_{}".format(0))] for _ in self.dirs]
@@ -132,30 +120,17 @@ class DAGNN_BN(DVAE_BN_PYG):
                     le_idx = torch.cat(le_idx, dim=-1)
                     lp_edge_index = G.edge_index[:, le_idx]
 
-                    if self.agg_x:
-                        # it wouldn't make sense to perform attention based on h when aggregating x... so no h needed
-                        kwargs = {"h_attn": G.x, "h_attn_q": G.x} if self.agg_attn else {}  # just ignore query arg if self attn
-                        node_agg = self.__getattr__("node_aggr_{}".format(d))[0]
-                        ps_h = node_agg(G.x, lp_edge_index, edge_attr=None, **kwargs)[layer]
-                        # if we aggregate x...
-                        s = ps_h.shape
-                        if s[-1] < self.hidden_dim:
-                            ps_h = torch.cat([ps_h, torch.zeros(s[0], self.hidden_dim-s[1])], dim=-1)
-                        # print(G.x[lp_idx])
-                        # print(ps_h)
-
                 for i, cell in enumerate(self.__getattr__("cells_{}".format(d))):
-                    # print(l_idx, i)
+
                     if l_idx == 0:
                         ps_h = None
-                    elif not self.agg_x:
+                    else:
                         hs = G.h[d][i]
                         kwargs = {} if not self.agg_attn else \
                                     {"h_attn": G.x, "h_attn_q": G.x} if self.agg_attn_x else \
                                     {"h_attn": hs, "h_attn_q": G.h[d][i-1] if i > 0 else G.x}  # just ignore query arg if self attn
                         node_agg = self.__getattr__("node_aggr_{}".format(d))[i]
                         ps_h = node_agg(hs, lp_edge_index, edge_attr=None, **kwargs)[layer]
-                    # print(inp.shape, ps_h.shape if ps_h is not None else "None")
 
                     inp = cell(inp, ps_h)
                     G.h[d][i][layer] += inp
@@ -201,7 +176,6 @@ class DAGNN_BN(DVAE_BN_PYG):
         mu, logvar = self.fc1(Hg), self.fc2(Hg)
         return mu, logvar
 
-
     def _ipropagate_to(self, G, v, propagator, H=None, reverse=False):
         assert not reverse
         # propagate messages to vertex index v for all graphs in G
@@ -225,12 +199,9 @@ class DAGNN_BN(DVAE_BN_PYG):
             # if h is not provided, use gated sum of v's predecessors' states as the input hidden state
             if H is None:
                 H_pred1 = None
-                if self.agg_x:
-                    H_pred = [[self._one_hot(g.vs[x]['type'], self.nvt) for x in g.predecessors(v)] for g in G]
-                else:
-                    H_pred = [[g.vs[x][H_name] for x in g.predecessors(v)] for g in G]
-                    if self.agg_attn_x:
-                        H_pred1 = [[self._one_hot(g.vs[x]['type'], self.nvt) for x in g.predecessors(v)] for g in G]
+                H_pred = [[g.vs[x][H_name] for x in g.predecessors(v)] for g in G]
+                if self.agg_attn_x:
+                    H_pred1 = [[self._one_hot(g.vs[x]['type'], self.nvt) for x in g.predecessors(v)] for g in G]
 
                 max_n_pred = max([len(x) for x in H_pred])  # maximum number of predecessors
                 if max_n_pred == 0:
@@ -238,8 +209,6 @@ class DAGNN_BN(DVAE_BN_PYG):
                 else:
 
                     H_pred = [torch.cat(h_pred +
-                                        [self._get_zero_x((max_n_pred - len(h_pred)))], 0).unsqueeze(0)
-                              for h_pred in H_pred] if self.agg_x else [torch.cat(h_pred +
                                         [self._get_zero_hidden((max_n_pred - len(h_pred)))], 0).unsqueeze(0)
                               for h_pred in H_pred]
                     H_pred = torch.cat(H_pred, 0)  # batch * max_n_pred * hs
@@ -251,7 +220,7 @@ class DAGNN_BN(DVAE_BN_PYG):
                         H_pred1 = torch.cat(H_pred1, 0)  # batch * max_n_pred * hs
 
                     kwargs = {} if not self.agg_attn else \
-                            {"h_attn": H_pred if self.agg_x else H_pred1, "h_attn_q": X} if self.agg_attn_x else \
+                            {"h_attn": H_pred1, "h_attn_q": X} if self.agg_attn_x else \
                             {"h_attn": H_pred,
                              "h_attn_q": torch.cat([g.vs[v][H_name1] for g in G], dim=0) if l > 0 else X}  # just ignore query arg if self attn
 
@@ -262,20 +231,6 @@ class DAGNN_BN(DVAE_BN_PYG):
             for i, g in enumerate(G):
                 g.vs[v][H_name] = Hv[i:i + 1]
         return Hv
-
-
-def init_encoder(word_vectors, emb_dim):
-    if word_vectors is not None:
-        return nn.EmbeddingBag.from_pretrained(word_vectors, freeze=True, mode="sum")
-    elif len(emb_dim) > 0:
-        return nn.EmbeddingBag(emb_dim[0], emb_dim[1], mode="sum")
-    return None
-
-def init_param_emb(size, device):
-    param = torch.zeros(size).to(device)
-    glorot(param)
-    # uniform(size, param)
-    return param
 
 
 class AggConv(MessagePassing):
