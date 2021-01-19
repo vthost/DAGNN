@@ -1,5 +1,5 @@
 # DAGNN
-A graph neural network tailored to directed acyclic graphs that outperforms conventional GNNs by leveraging the partial order as strong inductive bias besides other suitable architectural features. <br/>Source code for ICLR 2021 submission https://openreview.net/forum?id=JbuYF437WB6.
+A graph neural network tailored to directed acyclic graphs that outperforms conventional GNNs by leveraging the partial order as strong inductive bias besides other suitable architectural features. <br/>Source code for ICLR 2021 paper https://openreview.net/forum?id=JbuYF437WB6.
 
 ## Installation
 * Tested with Python 3.7, PyTorch 1.5.0, and PyTorch Geometric 1.6.0
