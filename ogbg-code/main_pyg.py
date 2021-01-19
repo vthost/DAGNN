@@ -141,7 +141,7 @@ def main():
                         help='number of GNN message passing layers (default: 5)')
     parser.add_argument('--emb_dim', type=int, default=300,
                         help='dimensionality of hidden units in GNNs (default: 300)')
-    parser.add_argument('--batch_size', type=int, default=20,
+    parser.add_argument('--batch_size', type=int, default=80,
                         help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=30,
                         help='number of epochs to train (default: 30)')
@@ -154,7 +154,7 @@ def main():
                         help='filename to output result (default: )')
 
     ### DAGNN
-    parser.add_argument('--dagnn_wea', type=int, default=0, choices=[0, 1])
+    parser.add_argument('--dagnn_wea', type=int, default=1, choices=[0, 1])
     parser.add_argument('--dagnn_layers', type=int, default=2)
     parser.add_argument('--dagnn_bidir', type=int, default=1, choices=[0, 1])
     parser.add_argument('--dagnn_agg', type=str, default=NA_ATTN_H)
@@ -163,7 +163,6 @@ def main():
     parser.add_argument('--dagnn_out_pool', type=str, default=P_MAX, choices=[P_ATTN, P_MAX, P_MEAN, P_ADD])
     parser.add_argument('--dagnn_dropout', type=float, default=0.0)
     parser.add_argument('--dagnn_mapper_bias', type=int, default=1, choices=[0, 1])
-    parser.add_argument('--dagnn_dense', type=int, default=0, choices=[0, 1])
 
     parser.add_argument('--dir_data', type=str, default=None,
                         help='... dir')

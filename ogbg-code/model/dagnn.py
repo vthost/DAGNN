@@ -17,8 +17,8 @@ from torch_geometric.utils import softmax
 class DAGNN(nn.Module):
 
     def __init__(self, num_vocab, max_seq_len, emb_dim, hidden_dim, out_dim,
-                 num_rels=2, w_edge_attr=True, num_layers=2, bidirectional=False, mapper_bias=True,  # bias only for DVAE simulation
-                 agg_x=True, agg=NA_ATTN_H, out_wx=True, out_pool_all=True, out_pool=P_MAX, encoder=None, dropout=0.0,
+                 num_rels=2, w_edge_attr=True, num_layers=2, bidirectional=True, mapper_bias=True,  # bias only for DVAE simulation
+                 agg_x=False, agg=NA_ATTN_H, out_wx=True, out_pool_all=True, out_pool=P_MAX, encoder=None, dropout=0.0,
                  word_vectors=None, emb_dims=[], activation=None, num_class=0, recurr=1):
         super().__init__()
         self.num_class = num_class
