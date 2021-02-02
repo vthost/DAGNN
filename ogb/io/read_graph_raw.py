@@ -94,7 +94,7 @@ def read_csv_graph_raw(raw_dir, add_inverse_edge = True, additional_node_files =
     print('Processing graphs...')
     for num_node, num_edge in tqdm(zip(num_node_list, num_edge_list), total=len(num_node_list)):
         # i += 1
-        # if i > 70: break
+        # if i > 70: break  # VT to test locally
         graph = dict()
 
         ### handling edge

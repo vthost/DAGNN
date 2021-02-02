@@ -7,7 +7,6 @@ from torch_geometric.nn.glob import *
 from torch_geometric.nn.inits import uniform, glorot
 from torch_geometric.nn import MessagePassing
 from src.constants import *
-from src.utils_dag import stack_padded
 from typing import Optional
 from torch import Tensor
 from torch_geometric.typing import OptTensor
@@ -132,10 +131,6 @@ class DAGNN(nn.Module):
             torch.stack([G._bi_layer_idx0, G._bi_layer_index0], dim=0),
             torch.stack([G._bi_layer_idx1, G._bi_layer_index1], dim=0)
         ], dim=0)
-        G.bi_layer_parent_index = stack_padded(
-            torch.stack([G._bi_layer_parent_idx0, G._bi_layer_parent_index0], dim=0),
-            torch.stack([G._bi_layer_parent_idx1, G._bi_layer_parent_index1], dim=0)
-        )
 
         device = G.x.device
         num_nodes_batch = G.x.shape[0]
