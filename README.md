@@ -15,7 +15,7 @@ The DAGNN models in this directory contain additional methods to support the dec
 * `/ogb` <br/>Basically the code from the [Open Graph Benchmark (OGB)](https://github.com/snap-stanford/ogb). We just added additional data preprocessing steps necessary for DAGNN.
 * `/ogbg-code` <br/>Experiment code for TOK and LP experiments over the `ogbg-code` data from OGB. The [DAGNN model](ogbg-code/models/dagnn.py) in this directory, can be considered as the basic implementation of DAGNN.
 * `/scripts` <br/>Scripts for running the experiments.
-* `/src` <br/> Basic utilities used in all experiments. 
+* `/src` <br/> Basic utilities used in all experiments.
 
 ## OGB Experiments
 
