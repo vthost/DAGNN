@@ -13,7 +13,7 @@ A graph neural network tailored to directed acyclic graphs that outperforms conv
 <br/>Basically the experiment code and data from [D-VAE](https://github.com/muhanzhang/D-VAE/).
 The DAGNN models in this directory contain additional methods to support the decoding loss. 
 * `/ogb` <br/>Basically the code from the [Open Graph Benchmark (OGB)](https://github.com/snap-stanford/ogb). We just added additional data preprocessing steps necessary for DAGNN.
-* `/ogbg-code` <br/>Experiment code for TOK and LP experiments over the `ogbg-code` data from OGB. The [DAGNN model](ogbg-code/models/dagnn.py) in this directory, can be considered as the basic implementation of DAGNN.
+* `/ogbg-code` <br/>Experiment code for TOK and LP experiments over the `ogbg-code2` data from OGB. The [DAGNN model](ogbg-code/models/dagnn.py) in this directory, can be considered as the basic implementation of DAGNN.
 * `/scripts` <br/>Scripts for running the experiments.
 * `/src` <br/> Basic utilities used in all experiments.
 
@@ -21,7 +21,7 @@ The DAGNN models in this directory contain additional methods to support the dec
 
 * Run `./scripts/ogb_tok.sh` or `./scripts/ogb_lp.sh`
 * The `ogbg-code2` data will be downloaded at first run, set the directory for storage in the scripts (`$DATA`). We updated the code since the ogbg-code dataset used in the paper is deprecated and not available anymore.
-* By default, the script will run DAGNN over a 15% random subset of `ogbg-code`. To change these settings, see the comments in the scripts.
+* By default, the script will run DAGNN over a 15% random subset of `ogbg-code2`. To change these settings, see the comments in the scripts.
 
 ## DAG Scoring Experiments
 * The two datasets are Neural Architectures (NA) and Bayesian Networks (BN) in `/dvae/data`. Since the latter is rather large, we suggest to start with the former. 
