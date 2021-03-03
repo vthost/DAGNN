@@ -60,7 +60,7 @@ for f in $SAVE/$NAME*; do
 done
 
 python main_pyg_lp.py --gnn=$MODEL --drop_ratio=0 --max_seq_len=5 --num_vocab=5000 --lr=$LR \
-      --num_layer=$LAY  --emb_dim=300 --batch_size=$BATCHSIZE --folds=$FOLDS --epochs=$EPOCHS --num_workers=$BATCHSIZE --dataset="ogbg-code" \
+      --num_layer=$LAY  --emb_dim=300 --batch_size=$BATCHSIZE --folds=$FOLDS --epochs=$EPOCHS --num_workers=$BATCHSIZE --dataset="ogbg-code2" \
       --dir_data=$DATA  --dir_save=$SAVE --filename=$NAME --train_idx=$TIDX --clip=$CLIP --dagnn_mapper_bias=$MAPPER_BIAS \
       --dagnn_wea=$EA --dagnn_layers=$LAYDAG --dagnn_bidir=$BIDIR --dagnn_agg=$AGG \
       --dagnn_out_pool_all=$POOL_ALL --dagnn_out_pool=$POOL --dagnn_dropout=$DROPOUT \
