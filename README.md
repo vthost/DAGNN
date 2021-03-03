@@ -20,7 +20,7 @@ The DAGNN models in this directory contain additional methods to support the dec
 ## OGB Experiments
 
 * Run `./scripts/ogb_tok.sh` or `./scripts/ogb_lp.sh`
-* The `ogbg-code` data will be downloaded at first run, set the directory for storage in the scripts (`$DATA`)
+* The `ogbg-code2` data will be downloaded at first run, set the directory for storage in the scripts (`$DATA`). We updated the code since the ogbg-code dataset used in the paper is deprecated and not available anymore.
 * By default, the script will run DAGNN over a 15% random subset of `ogbg-code`. To change these settings, see the comments in the scripts.
 
 ## DAG Scoring Experiments
