@@ -43,10 +43,10 @@ def add_order_info_01(graph):
     l1 = top_sort(ei2, graph.num_nodes)
     ns = torch.LongTensor([i for i in range(graph.num_nodes)])
 
-    graph.__setattr__("_bi_layer_idx0", l0)
-    graph.__setattr__("_bi_layer_index0", ns)
-    graph.__setattr__("_bi_layer_idx1", l1)
-    graph.__setattr__("_bi_layer_index1", ns)
+    graph.__setattr__("bi_layer_idx0", l0)
+    graph.__setattr__("bi_layer_index0", ns)
+    graph.__setattr__("bi_layer_idx1", l1)
+    graph.__setattr__("bi_layer_index1", ns)
 
     assert_order(graph.edge_index, l0, ns)
     assert_order(ei2, l1, ns)

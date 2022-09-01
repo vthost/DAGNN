@@ -51,7 +51,7 @@ def read_graph_pyg(raw_dir, add_inverse_edge = False, additional_node_files = []
         add_order_info_01(g)  # DAGNN
         # length of longest path
         # layer ids start with 0 so max, gives actual path length and -1 is not necessary
-        g.len_longest_path = float(torch.max(g._bi_layer_idx0).item())
+        g.len_longest_path = float(torch.max(g.bi_layer_idx0).item())
 
     return pyg_graph_list
 
