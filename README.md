@@ -1,6 +1,8 @@
 # DAGNN
 A graph neural network tailored to directed acyclic graphs that outperforms conventional GNNs by leveraging the partial order as strong inductive bias besides other suitable architectural features. <br/>Source code for ICLR 2021 paper https://openreview.net/forum?id=JbuYF437WB6.
 
+**Update Dec'2023**<br/>Please also check out [our novel work](https://proceedings.neurips.cc/paper_files/paper/2023/file/94e85561a342de88b559b72c9b29f638-Paper-Conference.pdf), which proposes a more efficient, transformer-based model! The code can be found [here](https://github.com/LUOyk1999/DAGformer).
+
 ## Installation
 * Tested with Python 3.7, PyTorch 1.5.0, and PyTorch Geometric 1.6.0
 * Set up an Anaconda environment: `./setup.sh` 
