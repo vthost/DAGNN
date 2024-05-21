@@ -128,8 +128,8 @@ class DAGNN(nn.Module):
     def forward(self, G):
         # need to create these here since pyg's batching otherwise messes up the indices
         G.bi_layer_index = torch.stack([
-            torch.stack([G._bi_layer_idx0, G._bi_layer_index0], dim=0),
-            torch.stack([G._bi_layer_idx1, G._bi_layer_index1], dim=0)
+            torch.stack([G.bi_layer_idx0, G.bi_layer_index0], dim=0),
+            torch.stack([G.bi_layer_idx1, G.bi_layer_index1], dim=0)
         ], dim=0)
 
         device = G.x.device
